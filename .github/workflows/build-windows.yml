@@ -1,0 +1,75 @@
+# Mirrored from smart-sell/smart-sell apps/imagegen-desktop/release-repo/build-windows.yml —
+# edit it there and copy it here. Started by `npm run release:windows` in that folder.
+#
+# Builds the Windows installer of SmartSell Image on a GitHub-hosted Windows runner (the app's
+# main process ships as V8 bytecode, which only Windows Electron compiles for Windows). The
+# sources arrive as the asset of a draft release and are deleted at the end in every case.
+# Logs are public: no step prints source or secrets.
+name: build-windows
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: Draft release that holds src.tar.gz
+        required: true
+permissions:
+  contents: write
+concurrency: build-windows
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      APP: src/apps/imagegen-desktop
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Fetch the sources
+        shell: pwsh
+        run: |
+          gh release download "${{ inputs.draft }}" --pattern src.tar.gz --dir "$env:RUNNER_TEMP"
+          New-Item -ItemType Directory src | Out-Null
+          tar -xzf "$env:RUNNER_TEMP/src.tar.gz" -C src
+      - name: Install
+        working-directory: ${{ env.APP }}
+        run: |
+          npm ci --no-audit --no-fund
+          node node_modules/electron/install.js
+      - name: Package
+        working-directory: ${{ env.APP }}
+        run: npm run package:win
+      - name: Install and launch the built installer
+        shell: pwsh
+        working-directory: ${{ env.APP }}
+        run: |
+          $setup = Get-ChildItem release -Filter 'SmartSellImage-Setup-*.exe' | Select-Object -First 1
+          "installer: $($setup.Name) $([math]::Round($setup.Length / 1MB)) MB"
+          Start-Process $setup.FullName -ArgumentList '/S' -Wait
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\SmartSell Image\SmartSell Image.exe'
+          if (-not (Test-Path $exe)) { throw "not installed: $exe" }
+          Start-Process $exe
+          # The engine starts Codex from the bytecode main process: a Codex process means the
+          # bytecode loaded and ran on Windows.
+          $started = $false
+          for ($i = 0; $i -lt 45 -and -not $started; $i++) { Start-Sleep 2; $started = [bool](Get-Process codex -ErrorAction SilentlyContinue) }
+          Get-Process 'SmartSell Image', codex -ErrorAction SilentlyContinue | Format-Table Name, Id, MainWindowTitle -AutoSize
+          Get-Process 'SmartSell Image', codex -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $started) { throw 'The app did not start its engine (no Codex process after 90 s).' }
+      - name: Publish
+        working-directory: ${{ env.APP }}
+        run: node scripts/publish-release.mjs
+      - name: One-line install in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          irm https://github.com/${{ github.repository }}/releases/latest/download/install-win.ps1 | iex
+          $started = $false
+          for ($i = 0; $i -lt 45 -and -not $started; $i++) { Start-Sleep 2; $started = [bool](Get-Process codex -ErrorAction SilentlyContinue) }
+          Get-Process 'SmartSell Image', codex -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not $started) { throw 'The one-line install did not leave a running app.' }
+      - name: Delete the draft that held the sources
+        if: always()
+        shell: pwsh
+        run: gh release delete "${{ inputs.draft }}" --yes
