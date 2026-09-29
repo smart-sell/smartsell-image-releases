@@ -48,9 +48,10 @@ jobs:
           $setup = Get-ChildItem release -Filter 'SmartSellImage-Setup-*.exe' | Select-Object -First 1
           "installer: $($setup.Name) $([math]::Round($setup.Length / 1MB)) MB"
           Start-Process $setup.FullName -ArgumentList '/S' -Wait
-          $exe = Join-Path $env:LOCALAPPDATA 'Programs\SmartSell Image\SmartSell Image.exe'
-          if (-not (Test-Path $exe)) { throw "not installed: $exe" }
-          Start-Process $exe
+          $exe = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'SmartSell Image.exe' -Recurse -Depth 1 | Select-Object -First 1
+          if (-not $exe) { throw 'SmartSell Image.exe is not under %LOCALAPPDATA%\Programs' }
+          "installed: $($exe.FullName)"
+          Start-Process $exe.FullName
           # The engine starts Codex from the bytecode main process: a Codex process means the
           # bytecode loaded and ran on Windows.
           $started = $false
